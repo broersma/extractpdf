@@ -61,7 +61,7 @@ def get_text_labels(layout):
 
 
 def parse_obj(objs, labels):
-    from pdfminer.layout import LTTextLine, LTTextBox, LTFigure
+    from pdfminer.layout import LTTextLine, LTTextBox, LTFigure, LTImage
 
     for obj in objs:
         if isinstance(obj, LTTextLine):
@@ -71,14 +71,89 @@ def parse_obj(objs, labels):
                 add(labels, fontname, fontsize, obj, orientation, text)
         elif isinstance(obj, (LTFigure, LTTextBox)):
             parse_obj(obj._objs, labels)
+        elif isinstance(obj, (LTImage)):
+            parse_img(obj, labels)
 
+def parse_img(img_obj, labels):
+    from pdfminer.image import ImageWriter
+    from subprocess import call
+    from pdfminer.pdftypes import PDFNotImplementedError
+    from os import remove, rename, path
+
+    try:
+        logging.info("Writing " + img_obj.name)
+        image_writer = ImageWriter(".")
+        # TODO this is not thread safe... (so run with "-p 1" for now)
+        output_filename = image_writer.export_image(img_obj)
+        # TODO rename(output_filename, ...)
+        logging.info("Written " + output_filename)
+        logging.info("Calling Tesseract hOCR")
+        call(["tesseract", output_filename, "out", "-l", "nld", "hocr"])
+        # TODO remove(output_filename)
+
+        if path.isfile('./out.html'):
+            # TODO fix race condition
+            from extracthocr import get_bbox_page, get_bbox_texts
+            for label in get_bbox_texts('./out.html'):
+                labels.append(convert_label_bbox(label, img_obj.bbox, get_bbox_page('./out.html')))
+            remove('./out.html')
+        else:
+            logging.error("Image object kon niet verwerkt worden door Tesseract: " + output_filename + ".")
+    except PDFNotImplementedError as e:
+        logging.error("Image object kon niet verwerkt worden: " + str(e) + ". Mogelijk helpt het opslaan vam de PDF met ondersteuning voor Acrobat 4.x en later.")
+
+def convert_label_bbox(label, pdf_coords, img_coords):
+    """
+    >>> convert_label_bbox({"x0":0,"x1":0,"y0":0,"y1":0},(0,0,1,1),(0,0,1,1))
+    {'y1': 0, 'y0': 0, 'x0': 0, 'x1': 0}
+    >>> convert_label_bbox({"x0":1,"x1":1,"y0":1,"y1":1},(0,0,1,1),(0,0,1,1))
+    {'y1': 1, 'y0': 1, 'x0': 1, 'x1': 1}
+
+    >>> convert_label_bbox({"x0":1,"x1":1,"y0":1,"y1":1},(0,0,2,1),(0,0,1,1))
+    {'y1': 1, 'y0': 1, 'x0': 2, 'x1': 2}
+    >>> convert_label_bbox({"x0":1,"x1":1,"y0":1,"y1":1},(0,0,1,2),(0,0,1,1))
+    {'y1': 2, 'y0': 2, 'x0': 1, 'x1': 1}
+
+    >>> convert_label_bbox({"x0":1,"x1":1,"y0":1,"y1":1},(1,0,2,1),(0,0,1,1))
+    {'y1': 1, 'y0': 1, 'x0': 2, 'x1': 2}
+    >>> convert_label_bbox({"x0":1,"x1":1,"y0":1,"y1":1},(0,1,1,2),(0,0,1,1))
+    {'y1': 2, 'y0': 2, 'x0': 1, 'x1': 1}
+    >>> convert_label_bbox({"x0":0.25,"x1":0.75,"y0":0.25,"y1":0.75},(-0.5,20,0.5,21),(0,0,1,1))
+    {'y1': 20.75, 'y0': 20.25, 'x0': -0.25, 'x1': 0.25}
+    >>> convert_label_bbox({"x0":28,"x1":87,"y0":321,"y1":580},(-0.066051, 256.18399999999997, 1772.045949, 1104.836),(0, 0, 4928, 2360))
+    {'y1': 464.75101694915253, 'y0': 371.61505593220335, 'x0': 10.002767181818184, 'x1': 31.219205493506497}
+    """
+    assert img_coords[0] == 0 and img_coords[1] == 0
+
+    img_width = img_coords[2] - img_coords[0]
+    pdf_width = pdf_coords[2] - pdf_coords[0]
+    width_scale = pdf_width / img_width
+    label['x0'] *= width_scale
+    label['x1'] *= width_scale
+
+    img_height = img_coords[3] - img_coords[1]
+    pdf_height = pdf_coords[3] - pdf_coords[1]
+    height_scale = pdf_height / img_height
+    label['y0'] *= height_scale
+    label['y1'] *= height_scale
+
+    x_translation = pdf_coords[0] - img_coords[0]
+    y_translation = pdf_coords[1] - img_coords[1]
+
+    label['x0'] += x_translation
+    label['x1'] += x_translation
+
+    label['y0'] += y_translation
+    label['y1'] += y_translation
+
+    return label
 
 def get_font(obj):
     from pdfminer.layout import LTTextLine, LTChar
 
     for obj in obj._objs:
         if isinstance(obj, LTChar):
-            return obj.fontname, obj.fontsize, 'H' if obj.upright else 'V'
+            return obj.fontname, obj.size, 'H' if obj.upright else 'V'
         elif isinstance(obj, LTTextLine):
             return get_font(obj)
     return 'unknown', 0, 'H'
