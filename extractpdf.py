@@ -67,8 +67,8 @@ def parse_obj(objs, labels):
         if isinstance(obj, LTTextLine):
             text = obj.get_text().strip()
             if len(text) > 0:
-                fontname, fontsize, orientation = get_font(obj)
-                add(labels, fontname, fontsize, obj, orientation, text)
+                font = get_font(obj)
+                add(labels, obj, text, font)
         elif isinstance(obj, (LTFigure, LTTextBox)):
             parse_obj(obj._objs, labels)
         elif isinstance(obj, (LTImage)):
@@ -159,7 +159,8 @@ def get_font(obj):
     return 'unknown', 0, 'H'
 
 
-def add(labels, fontname, fontsize, obj, orientation, text):
+def add(labels, obj, text, font):
+    fontname, fontsize, orientation = font
     labels.append({
         "x0": obj.x0,
         "y0": obj.y0,
